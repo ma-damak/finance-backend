@@ -13,6 +13,14 @@ const {
   sendResetSuccessEmail,
 } = require('../nodemailer/emails')
 
+const {
+  tokenExtractor,
+  userExtractor,
+  requireAdmin,
+} = require('../utils/middleware')
+
+const ROLES = ['user', 'manager', 'accountant']
+
 const createToken = (id) => {
   return jwt.sign({ id }, process.env.SECRET, { expiresIn: '3d' })
 }
@@ -28,11 +36,46 @@ const generateVerificationCode = () => {
 
 const router = Router()
 
-router.get('/', async (req, res) => {
-  const users = await User.find({})
-  res.json(users)
-})
+// roles management
+router.get(
+  '/',
+  tokenExtractor,
+  userExtractor,
+  requireAdmin,
+  async (req, res) => {
+    const users = await User.find({ isVerified: true, role: { $ne: 'admin' } })
+    res.json(users)
+  }
+)
 
+router.put(
+  '/:id/role',
+  tokenExtractor,
+  userExtractor,
+  requireAdmin,
+  async (req, res, next) => {
+    try {
+      if (!ROLES.includes(req.body.role)) {
+        return res.status(403).json({ error: 'invalid role' })
+      }
+
+      const updatedUser = await User.findByIdAndUpdate(
+        req.params.id,
+        { role: req.body.role },
+        { new: true, runValidators: true }
+      )
+
+      if (!updatedUser) {
+        return res.status(404).json({ error: 'user not found' })
+      }
+      return res.json(updatedUser)
+    } catch (error) {
+      next(error)
+    }
+  }
+)
+
+// auth
 router.post('/signup', async (req, res, next) => {
   const { email, password } = req.body
   try {
@@ -95,7 +138,7 @@ router.post('/login', async (req, res, next) => {
     }
 
     const token = createToken(user._id)
-    res.status(200).json({ email, token })
+    res.status(200).json({ email, token, role: user.role })
   } catch (error) {
     next(error)
   }
@@ -124,7 +167,9 @@ router.post('/verify-email', async (req, res, next) => {
     await sendWelcomeEmail(savedUser.email)
 
     const token = createToken(savedUser._id)
-    res.status(200).json({ email: savedUser.email, token })
+    res
+      .status(200)
+      .json({ email: savedUser.email, token, role: savedUser.role })
   } catch (error) {
     next(error)
   }
